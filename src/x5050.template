@@ -1,0 +1,116 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Copyright (c) 2019 Junegunn Choi
+#
+# MIT License
+#
+# Permission is hereby granted, free of charge, to any person obtaining
+# a copy of this software and associated documentation files (the
+# "Software"), to deal in the Software without restriction, including
+# without limitation the rights to use, copy, modify, merge, publish,
+# distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so, subject to
+# the following conditions:
+#
+# The above copyright notice and this permission notice shall be
+# included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+# LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+# WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+require 'erb'
+require 'fileutils'
+require 'shellwords'
+require 'tempfile'
+
+VALID_POSITIONS = %w[right left up down].freeze
+DEFAULT_BROWSER = 'Chrome'
+DEFAULT_POSITION = 'right'
+
+TEMPLATE = <<~ERB
+  on run argv
+    tell application "System Events"
+      set active_app to first application process whose frontmost is true
+    end tell
+
+    tell application "<%= browser %>"
+      if (not exists front window) or (not visible of front window) or (count of argv > 0)
+        activate
+        repeat while not frontmost
+          delay 0.1
+        end repeat
+
+        tell application "System Events"
+          keystroke "t" using command down
+        end tell
+        repeat while (not exists front window) or (not visible of front window)
+          delay 0.1
+        end repeat
+      end if
+      if count of argv > 0
+        set URL of last tab of front window to item 1 of argv
+      end if
+      set win_id to index of front window
+    end tell
+
+    tell application "System Events"
+      set browser_app to application process "<%= browser %>"
+      repeat 2 times
+        set position of front window  of active_app  to {<%= x1 %>, <%= y1 %>}
+        set size     of front window  of active_app  to {<%= w1 %>, <%= h1 %>}
+        set position of window win_id of browser_app to {<%= x2 %>, <%= y2 %>}
+        set size     of window win_id of browser_app to {<%= w2 %>, <%= h2 %>}
+      end repeat
+    end tell
+
+    repeat while frontmost of active_app is false
+      tell application (name of active_app) to activate
+      delay 0.5
+    end repeat
+  end run
+ERB
+
+args = ([DEFAULT_BROWSER, DEFAULT_POSITION] + ARGV).group_by do |a|
+  if VALID_POSITIONS.any? { |pos| pos.start_with?(a) } then :pos
+  elsif a =~ /^[0-9]+$/ && a.to_i.between?(1, 100) then :size
+  elsif a.include?('://') then :url
+  elsif a =~ /^[[:alpha:]]/ then :browser
+  else raise("Invalid argument: #{a}")
+  end
+end
+
+pos = args.dig(:pos, -1)
+size = args.dig(:size, -1)&.to_i || 50
+browser = args.dig(:browser, -1)
+url = args.dig(:url, -1)
+
+Tempfile.open('xsize') do |bin|
+  bin.binmode
+  bin.write(DATA.read.tap { |b| raise 'x5050 not built properly' if b.empty? })
+  bin.close
+  FileUtils.chmod('a+x', bin.path)
+  x, y, w, h = `#{bin.path}`.split.map(&:to_i)
+  dw = w * size / 100
+  dh = h * size / 100
+  x1, y1, x2, y2, w1, h1, w2, h2 =
+    case pos.downcase[0]
+    when 'r' then [x,      y,      x + w - dw, y,          w - dw, h,      dw, h]
+    when 'l' then [x + dw, y,      x,          y,          w - dw, h,      dw, h]
+    when 'u' then [x,      y + dh, x,          y,          w,      h - dh, w,  dh]
+    when 'd' then [x,      y,      x,          y + h - dh, w,      h - dh, w,  dh]
+    else raise "Invalid window position: #{pos}"
+    end
+  Tempfile.open('xsplit') do |f|
+    f.puts(ERB.new(TEMPLATE).result(binding))
+    f.close
+    system(['osascript', f.path, url].compact.map(&:shellescape).join(' '))
+  end
+end
+
+__END__
