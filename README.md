@@ -64,7 +64,7 @@ I extracted the split layout code from [vim-xmark][xmark] into *x5050* so
 I can use it with the new plugin.
 
 ```vim
-if has('mac') && excutable('x5050')
+if has('mac') && executable('x5050')
   function! MKDPSplit(url)
     call system('x5050 '.shellescape(a:url))
   endfunction
